@@ -26,6 +26,8 @@ import {
 import { shouldRunBackground, startBackgroundTask, collectBackgroundResults } from "./background.js";
 import { consumeCronQueue } from "./cron.js";
 import "./cron.js"; // 自注册 schedule_cron/list_crons/cancel_cron
+import { consumeLeadInbox } from "./teams.js";
+import "./teams.js"; // 自注册 spawn_teammate/send_message/check_inbox
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -41,6 +43,13 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
     for (const job of fired) {
       messages.push({ role: "user", content: `[Scheduled] ${job.prompt}` } as Msg);
       console.log(`  \x1b[35m[inject cron] ${job.prompt.slice(0, 50)}\x1b[0m`);
+    }
+
+    // s15: 注入 lead 收件箱里的队友消息
+    const inbox = consumeLeadInbox();
+    for (const m of inbox) {
+      messages.push({ role: "user", content: `[Inbox] From ${m.from}: ${m.content}` } as Msg);
+      console.log(`  \x1b[35m[inject inbox] from ${m.from}\x1b[0m`);
     }
 
     // s05: nag 提醒 —— 连续 3 轮没更新 todo 就注入一条提醒

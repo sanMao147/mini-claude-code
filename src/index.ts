@@ -4,6 +4,7 @@ import { provider, BASE_URL, MODEL } from "./config.js";
 import { ask, closeInput } from "./input.js";
 import { triggerHooks } from "./hooks.js";
 import { startScheduler, hasCronQueue } from "./cron.js";
+import { hasPendingInbox } from "./teams.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -20,9 +21,9 @@ async function main(): Promise<void> {
   const history: Msg[] = [];
   let busy = false;
 
-  // s14: 队列处理器 —— agent 空闲且有待投递的 cron 任务时自动跑一轮
+  // s14/s15: 队列处理器 —— agent 空闲且有待投递的 cron 任务或队友消息时自动跑一轮
   const queueProcessor = setInterval(async () => {
-    if (busy || !hasCronQueue()) return;
+    if (busy || (!hasCronQueue() && !hasPendingInbox())) return;
     busy = true;
     try {
       console.log("\n  \x1b[35m[queue processor] delivering scheduled work\x1b[0m");

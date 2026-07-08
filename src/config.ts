@@ -265,4 +265,43 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "spawn_teammate",
+      description: "Spawn a teammate agent in the background to handle a subtask.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Unique teammate name/id." },
+          role: { type: "string", description: "Short role description." },
+          prompt: { type: "string", description: "Self-contained task for the teammate." },
+        },
+        required: ["name", "role", "prompt"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_message",
+      description: "Send a message to a teammate via the MessageBus.",
+      parameters: {
+        type: "object",
+        properties: {
+          to: { type: "string", description: "Recipient teammate name." },
+          content: { type: "string", description: "Message content." },
+        },
+        required: ["to", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_inbox",
+      description: "Check the Lead's inbox for teammate messages (destructive read).",
+      parameters: { type: "object", properties: {} },
+    },
+  },
 ];
