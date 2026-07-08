@@ -304,4 +304,47 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: { type: "object", properties: {} },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "request_shutdown",
+      description: "Request a teammate to shut down gracefully (protocol).",
+      parameters: {
+        type: "object",
+        properties: { teammate: { type: "string", description: "Teammate name to shut down." } },
+        required: ["teammate"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "request_plan",
+      description: "Ask a teammate to submit a plan for a task (protocol).",
+      parameters: {
+        type: "object",
+        properties: {
+          teammate: { type: "string", description: "Teammate name." },
+          task: { type: "string", description: "Task description to plan." },
+        },
+        required: ["teammate", "task"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "review_plan",
+      description: "Approve or reject a submitted plan by request_id (protocol).",
+      parameters: {
+        type: "object",
+        properties: {
+          request_id: { type: "string", description: "The plan request id." },
+          approve: { type: "boolean", description: "True=approve, False=reject." },
+          feedback: { type: "string", description: "Optional feedback when rejecting." },
+        },
+        required: ["request_id", "approve"],
+      },
+    },
+  },
 ];

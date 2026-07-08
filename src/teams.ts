@@ -4,27 +4,35 @@ import type OpenAI from "openai";
 import { client, MODEL } from "./config.js";
 import { TOOL_HANDLERS, runBash, runRead, runWrite, type ToolArgs } from "./tools.js";
 
-// ── s15: Agent Teams — MessageBus + 后台 teammate + lead 收件箱注入 ──
-//   教学版：teammate 用后台 async 函数（最多 10 轮），结果经 MessageBus 回 lead。
+// ── s15/s16: Agent Teams — MessageBus + 协议(请求/响应) + 后台 teammate ──
 
 const MAILBOX_DIR = path.resolve(process.cwd(), ".mailboxes");
 function ensureMailboxDir(): void {
   fs.mkdirSync(MAILBOX_DIR, { recursive: true });
 }
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 export class MessageBus {
-  send(from: string, to: string, content: string, type = "message"): void {
+  send(
+    from: string,
+    to: string,
+    content: string,
+    type = "message",
+    metadata: Record<string, unknown> = {},
+  ): void {
     ensureMailboxDir();
-    const msg = { from, to, content, type, ts: Date.now() };
+    const msg = { from, to, content, type, ts: Date.now(), metadata };
     fs.appendFileSync(path.join(MAILBOX_DIR, `${to}.jsonl`), JSON.stringify(msg) + "\n");
-    console.log(`  \x1b[33m[bus] ${from} → ${to}: ${content.slice(0, 50)}\x1b[0m`);
+    console.log(`  \x1b[33m[bus] ${from} → ${to}: (${type}) ${content.slice(0, 50)}\x1b[0m`);
   }
   readInbox(agent: string): Array<Record<string, unknown>> {
     const inbox = path.join(MAILBOX_DIR, `${agent}.jsonl`);
     if (!fs.existsSync(inbox)) return [];
     const lines = fs.readFileSync(inbox, "utf8").split(/\r?\n/).filter(Boolean);
     const msgs = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
-    fs.unlinkSync(inbox); // 消费即删除
+    fs.unlinkSync(inbox);
     return msgs;
   }
   peek(agent: string): boolean {
@@ -36,9 +44,67 @@ export class MessageBus {
 export const BUS = new MessageBus();
 const activeTeammates = new Set<string>();
 
-type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+// ── s16: 协议状态（request_id 关联请求与响应）──
+export interface ProtocolState {
+  request_id: string;
+  type: "shutdown" | "plan_approval";
+  sender: string;
+  target: string;
+  status: "pending" | "approved" | "rejected";
+  payload: string;
+}
 
-// teammate 只有 4 个工具（不含 task，避免递归）
+const pendingRequests = new Map<string, ProtocolState>();
+
+function newRequestId(): string {
+  return `req_${Math.floor(Math.random() * 1_000_000).toString().padStart(6, "0")}`;
+}
+
+function matchResponse(responseType: string, requestId: string, approve: boolean): void {
+  const state = pendingRequests.get(requestId);
+  if (!state) {
+    console.log(`  \x1b[31m[protocol] unknown request_id: ${requestId}\x1b[0m`);
+    return;
+  }
+  if (state.type === "shutdown" && responseType !== "shutdown_response") {
+    console.log(`  \x1b[31m[protocol] type mismatch: expected shutdown_response, got ${responseType}\x1b[0m`);
+    return;
+  }
+  if (state.type === "plan_approval" && responseType !== "plan_approval_response") {
+    console.log(`  \x1b[31m[protocol] type mismatch: expected plan_approval_response, got ${responseType}\x1b[0m`);
+    return;
+  }
+  if (state.status !== "pending") {
+    console.log(`  \x1b[33m[protocol] ${requestId} already ${state.status}, ignoring\x1b[0m`);
+    return;
+  }
+  state.status = approve ? "approved" : "rejected";
+  const icon = approve ? "✓" : "✗";
+  const color = approve ? "32" : "31";
+  console.log(`  \x1b[${color}m[protocol] ${state.type} ${icon} (${requestId}: ${state.status})\x1b[0m`);
+}
+
+// ── s16: 统一收件箱消费（路由协议响应 + 返回全部消息）──
+export function consumeLeadInbox(): Array<Record<string, unknown>> {
+  const msgs = BUS.readInbox("lead");
+  if (!msgs.length) return [];
+  for (const msg of msgs) {
+    const meta = (msg.metadata as Record<string, unknown>) ?? {};
+    const reqId = String(meta.request_id ?? "");
+    const msgType = String(msg.type ?? "");
+    if (reqId && msgType.endsWith("_response")) {
+      const approve = Boolean(meta.approve);
+      matchResponse(msgType, reqId, approve);
+    }
+  }
+  return msgs;
+}
+
+export function hasPendingInbox(): boolean {
+  return BUS.peek("lead");
+}
+
+// ── teammate 子工具 ──
 const SUB_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
@@ -80,11 +146,49 @@ const SUB_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "submit_plan",
+      description: "Submit a plan for Lead approval.",
+      parameters: { type: "object", properties: { plan: { type: "string" } }, required: ["plan"] },
+    },
+  },
 ];
 
-// teammate 主循环（后台 async，最多 10 轮）
+type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+// teammate 收到 shutdown_request 时停止
+function handleInboxMessage(name: string, msg: Record<string, unknown>, messages: Msg[]): boolean {
+  const msgType = String(msg.type ?? "message");
+  const meta = (msg.metadata as Record<string, unknown>) ?? {};
+  const reqId = String(meta.request_id ?? "");
+  if (msgType === "shutdown_request") {
+    BUS.send(name, "lead", "Shutting down gracefully.", "shutdown_response", {
+      request_id: reqId,
+      approve: true,
+    });
+    console.log(`  \x1b[35m[protocol] ${name} approved shutdown (${reqId})\x1b[0m`);
+    return true;
+  }
+  if (msgType === "plan_approval_response") {
+    const approve = Boolean(meta.approve);
+    if (approve) {
+      messages.push({ role: "user", content: "[Plan approved] Proceed with the task." } as Msg);
+    } else {
+      messages.push({
+        role: "user",
+        content: `[Plan rejected] Feedback: ${String(msg.content ?? "")}`,
+      } as Msg);
+    }
+  }
+  return false;
+}
+
 async function teammateRun(name: string, role: string, prompt: string): Promise<void> {
-  const system = `You are '${name}', a ${role}. Use tools to complete tasks. Send results via send_message to 'lead'.`;
+  const system =
+    `You are '${name}', a ${role}. Use tools to complete tasks. ` +
+    `Check inbox for protocol messages (shutdown_request, plan_approval_response).`;
   const messages: Msg[] = [{ role: "user", content: prompt }];
   const handlers: Record<string, (a: ToolArgs) => string | Promise<string>> = {
     bash: (a) => runBash(String(a.command)),
@@ -94,13 +198,34 @@ async function teammateRun(name: string, role: string, prompt: string): Promise<
       BUS.send(name, String(a.to), String(a.content));
       return "Sent";
     },
+    submit_plan: (a) => teammateSubmitPlan(name, String(a.plan)),
   };
 
-  for (let i = 0; i < 10; i++) {
+  let shutdownRequested = false;
+  while (!shutdownRequested) {
+    // 处理收件箱协议消息
     const inbox = BUS.readInbox(name);
-    if (inbox.length) {
-      messages.push({ role: "user", content: `<inbox>${JSON.stringify(inbox)}</inbox>` } as Msg);
+    let shouldStop = false;
+    const nonProtocol: Record<string, unknown>[] = [];
+    for (const m of inbox) {
+      const mt = String(m.type ?? "");
+      if (mt === "shutdown_request" || mt === "plan_approval_response") {
+        if (handleInboxMessage(name, m, messages)) {
+          shouldStop = true;
+          break;
+        }
+      } else {
+        nonProtocol.push(m);
+      }
     }
+    if (shouldStop) {
+      shutdownRequested = true;
+      break;
+    }
+    if (nonProtocol.length) {
+      messages.push({ role: "user", content: `<inbox>${JSON.stringify(nonProtocol)}</inbox>` } as Msg);
+    }
+
     let response: OpenAI.Chat.Completions.ChatCompletion;
     try {
       response = await client.chat.completions.create({
@@ -114,7 +239,36 @@ async function teammateRun(name: string, role: string, prompt: string): Promise<
     }
     messages.push(response.choices[0].message as Msg);
     const msg = response.choices[0].message;
-    if (!msg.tool_calls || msg.tool_calls.length === 0) break;
+    if (!msg.tool_calls || msg.tool_calls.length === 0) {
+      // 空闲：等待收件箱消息（不退出），模拟 idle loop
+      while (!shutdownRequested) {
+        await sleep(1000);
+        const ib = BUS.readInbox(name);
+        if (!ib.length) continue;
+        let stop = false;
+        const np: Record<string, unknown>[] = [];
+        for (const m of ib) {
+          const mt = String(m.type ?? "");
+          if (mt === "shutdown_request" || mt === "plan_approval_response") {
+            if (handleInboxMessage(name, m, messages)) {
+              stop = true;
+              break;
+            }
+          } else {
+            np.push(m);
+          }
+        }
+        if (stop) {
+          shutdownRequested = true;
+          break;
+        }
+        if (np.length) {
+          messages.push({ role: "user", content: `<inbox>${JSON.stringify(np)}</inbox>` } as Msg);
+          break; // 带着新消息回到 LLM 轮
+        }
+      }
+      continue;
+    }
 
     const results: Msg[] = [];
     for (const tc of msg.tool_calls) {
@@ -132,7 +286,6 @@ async function teammateRun(name: string, role: string, prompt: string): Promise<
     messages.push(...results);
   }
 
-  // 收尾：把最终文本摘要发回 lead
   let summary = "Done.";
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
@@ -146,6 +299,20 @@ async function teammateRun(name: string, role: string, prompt: string): Promise<
   console.log(`  \x1b[32m[teammate] ${name} finished\x1b[0m`);
 }
 
+function teammateSubmitPlan(fromName: string, plan: string): string {
+  const reqId = newRequestId();
+  pendingRequests.set(reqId, {
+    request_id: reqId,
+    type: "plan_approval",
+    sender: fromName,
+    target: "lead",
+    status: "pending",
+    payload: plan,
+  });
+  BUS.send(fromName, "lead", plan, "plan_approval_request", { request_id: reqId });
+  return `Plan submitted (${reqId}). Waiting for approval...`;
+}
+
 export function spawnTeammate(name: string, role: string, prompt: string): string {
   if (activeTeammates.has(name)) return `Teammate '${name}' already exists`;
   activeTeammates.add(name);
@@ -154,33 +321,66 @@ export function spawnTeammate(name: string, role: string, prompt: string): strin
   return `Teammate '${name}' spawned as ${role}`;
 }
 
+// ── Lead 协议工具 ──
+export function runRequestShutdown(teammate: string): string {
+  const reqId = newRequestId();
+  pendingRequests.set(reqId, {
+    request_id: reqId,
+    type: "shutdown",
+    sender: "lead",
+    target: teammate,
+    status: "pending",
+    payload: "",
+  });
+  BUS.send("lead", teammate, "Please shut down gracefully.", "shutdown_request", {
+    request_id: reqId,
+  });
+  console.log(`  \x1b[35m[protocol] shutdown_request → ${teammate} (${reqId})\x1b[0m`);
+  return `Shutdown request sent to ${teammate} (req: ${reqId})`;
+}
+
+export function runRequestPlan(teammate: string, task: string): string {
+  BUS.send("lead", teammate, `Please submit a plan for: ${task}`, "message");
+  return `Asked ${teammate} to submit a plan`;
+}
+
+export function runReviewPlan(requestId: string, approve: boolean, feedback = ""): string {
+  const state = pendingRequests.get(requestId);
+  if (!state) return `Request ${requestId} not found`;
+  if (state.status !== "pending") return `Request ${requestId} already ${state.status}`;
+  state.status = approve ? "approved" : "rejected";
+  BUS.send("lead", state.sender, feedback || (approve ? "Approved" : "Rejected"),
+    "plan_approval_response", { request_id: requestId, approve });
+  console.log(`  \x1b[32m[protocol] plan ${approve ? "✓" : "✗"} (${requestId})\x1b[0m`);
+  return `Plan ${approve ? "approved" : "rejected"} (${requestId})`;
+}
+
 export function runSendMessage(args: ToolArgs): string {
   BUS.send("lead", String(args.to), String(args.content));
   return `Sent to ${args.to}`;
 }
 
 export function runCheckInbox(): string {
-  const msgs = BUS.readInbox("lead");
+  const msgs = consumeLeadInbox();
   if (!msgs.length) return "(inbox empty)";
-  return msgs.map((m) => `  [${m.from}] ${String(m.content).slice(0, 200)}`).join("\n");
+  return msgs
+    .map((m) => {
+      const meta = (m.metadata as Record<string, unknown>) ?? {};
+      const reqId = String(meta.request_id ?? "");
+      const tag = reqId ? ` [${m.type} req:${reqId}]` : ` [${m.type}]`;
+      return `  [${m.from}]${tag} ${String(m.content).slice(0, 200)}`;
+    })
+    .join("\n");
 }
 
-// agent.ts 循环顶部消费 lead 收件箱（破坏性），用于注入
-export function consumeLeadInbox(): Array<Record<string, unknown>> {
-  return BUS.readInbox("lead");
-}
-
-export function hasPendingInbox(): boolean {
-  return BUS.peek("lead");
-}
-
-export function allTeammatesDone(): boolean {
-  return activeTeammates.size === 0;
-}
-
-// 自注册 lead 团队工具
+// ── 自注册 Lead 团队工具 ──
 TOOL_HANDLERS.set("spawn_teammate", (a) =>
   spawnTeammate(String(a.name), String(a.role), String(a.prompt)),
 );
 TOOL_HANDLERS.set("send_message", runSendMessage);
 TOOL_HANDLERS.set("check_inbox", runCheckInbox);
+TOOL_HANDLERS.set("request_shutdown", (a) => runRequestShutdown(String(a.teammate)));
+TOOL_HANDLERS.set("request_plan", (a) => runRequestPlan(String(a.teammate), String(a.task)));
+TOOL_HANDLERS.set("review_plan", (a) =>
+  runReviewPlan(String(a.request_id), a.approve === true, String(a.feedback ?? "")),
+);
