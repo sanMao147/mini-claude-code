@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type OpenAI from "openai";
 import { client, MODEL } from "./config.js";
 import { TOOL_HANDLERS, runBash, runRead, runWrite, type ToolArgs } from "./tools.js";
+import { listTasks, claimTask, completeTask, canStart, type Task } from "./tasks.js";
 
 // ── s15/s16: Agent Teams — MessageBus + 协议(请求/响应) + 后台 teammate ──
 
@@ -12,6 +13,60 @@ function ensureMailboxDir(): void {
 }
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// ── s17: 自主循环 — 空闲轮询 + 自动认领任务 ──
+const IDLE_POLL_INTERVAL = 5000; // ms (5s)
+const IDLE_TIMEOUT = 60000;       // ms (60s)
+
+// 找出 pending、无 owner、且依赖已完成的任务
+function scanUnclaimedTasks(): Task[] {
+  return listTasks().filter((t) => t.status === "pending" && !t.owner && canStart(t.id));
+}
+
+// IDLE 阶段轮询：检查收件箱/任务板，返回 "work" | "shutdown" | "timeout"
+async function idlePoll(name: string, messages: Msg[]): Promise<"work" | "shutdown" | "timeout"> {
+  const iterations = Math.floor(IDLE_TIMEOUT / IDLE_POLL_INTERVAL);
+  for (let i = 0; i < iterations; i++) {
+    await sleep(IDLE_POLL_INTERVAL);
+
+    const inbox = BUS.readInbox(name);
+    if (inbox.length) {
+      // 优先处理 shutdown_request
+      for (const msg of inbox) {
+        if (String(msg.type ?? "") === "shutdown_request") {
+          const reqId = String((msg.metadata as Record<string, unknown>)?.request_id ?? "");
+          BUS.send(name, "lead", "Shutting down gracefully.", "shutdown_response", {
+            request_id: reqId,
+            approve: true,
+          });
+          console.log(`  \x1b[35m[protocol] ${name} approved shutdown in idle (${reqId})\x1b[0m`);
+          return "shutdown";
+        }
+      }
+      messages.push({ role: "user", content: `<inbox>${JSON.stringify(inbox)}</inbox>` } as Msg);
+      console.log(`  \x1b[36m[idle] ${name} found inbox messages\x1b[0m`);
+      return "work";
+    }
+
+    // 扫描任务板：自动认领无人认领的任务
+    const unclaimed = scanUnclaimedTasks();
+    if (unclaimed.length) {
+      const task = unclaimed[0];
+      const result = claimTask(task.id, name);
+      if (result.includes("Claimed")) {
+        messages.push({
+          role: "user",
+          content: `<auto-claimed>Task ${task.id}: ${task.subject}</auto-claimed>`,
+        } as Msg);
+        console.log(`  \x1b[32m[idle] ${name} auto-claimed: ${task.subject}\x1b[0m`);
+        return "work";
+      }
+      console.log(`  \x1b[33m[idle] ${name} claim failed: ${result}\x1b[0m`);
+    }
+  }
+  console.log(`  \x1b[31m[idle] ${name} timeout (${IDLE_TIMEOUT / 1000}s)\x1b[0m`);
+  return "timeout";
 }
 
 export class MessageBus {
@@ -154,6 +209,31 @@ const SUB_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: { type: "object", properties: { plan: { type: "string" } }, required: ["plan"] },
     },
   },
+  // s17: teammates can list / claim / complete tasks from the board
+  {
+    type: "function",
+    function: {
+      name: "list_tasks",
+      description: "List all tasks on the board.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "claim_task",
+      description: "Claim a pending, unowned task by id.",
+      parameters: { type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "complete_task",
+      description: "Mark an in-progress task as completed.",
+      parameters: { type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"] },
+    },
+  },
 ];
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -188,6 +268,7 @@ function handleInboxMessage(name: string, msg: Record<string, unknown>, messages
 async function teammateRun(name: string, role: string, prompt: string): Promise<void> {
   const system =
     `You are '${name}', a ${role}. Use tools to complete tasks. ` +
+    `You can list and claim tasks from the board. ` +
     `Check inbox for protocol messages (shutdown_request, plan_approval_response).`;
   const messages: Msg[] = [{ role: "user", content: prompt }];
   const handlers: Record<string, (a: ToolArgs) => string | Promise<string>> = {
@@ -199,91 +280,92 @@ async function teammateRun(name: string, role: string, prompt: string): Promise<
       return "Sent";
     },
     submit_plan: (a) => teammateSubmitPlan(name, String(a.plan)),
+    list_tasks: () =>
+      listTasks().map((t) => `  ${t.id}: ${t.subject} [${t.status}]`).join("\n") || "No tasks.",
+    claim_task: (a) => claimTask(String(a.task_id), name),
+    complete_task: (a) => completeTask(String(a.task_id)),
   };
 
   let shutdownRequested = false;
+  // WORK → IDLE → SHUTDOWN 生命周期（s17）
   while (!shutdownRequested) {
-    // 处理收件箱协议消息
-    const inbox = BUS.readInbox(name);
-    let shouldStop = false;
-    const nonProtocol: Record<string, unknown>[] = [];
-    for (const m of inbox) {
-      const mt = String(m.type ?? "");
-      if (mt === "shutdown_request" || mt === "plan_approval_response") {
-        if (handleInboxMessage(name, m, messages)) {
-          shouldStop = true;
-          break;
-        }
-      } else {
-        nonProtocol.push(m);
-      }
+    // 身份重注（s17）：上下文较短时提醒自己是谁
+    if (messages.length <= 3) {
+      messages.unshift({
+        role: "user",
+        content: `<identity>You are '${name}', role: ${role}. Continue your work.</identity>`,
+      } as Msg);
     }
-    if (shouldStop) {
+
+    // ── WORK 阶段：最多 10 轮工具循环 ──
+    let workShutdown = false;
+    for (let w = 0; w < 10; w++) {
+      // 处理收件箱协议消息
+      const inbox = BUS.readInbox(name);
+      let shouldStop = false;
+      const nonProtocol: Record<string, unknown>[] = [];
+      for (const m of inbox) {
+        const mt = String(m.type ?? "");
+        if (mt === "shutdown_request" || mt === "plan_approval_response") {
+          if (handleInboxMessage(name, m, messages)) {
+            shouldStop = true;
+            break;
+          }
+        } else {
+          nonProtocol.push(m);
+        }
+      }
+      if (shouldStop) {
+        workShutdown = true;
+        break;
+      }
+      if (nonProtocol.length) {
+        messages.push({ role: "user", content: `<inbox>${JSON.stringify(nonProtocol)}</inbox>` } as Msg);
+      }
+
+      let response: OpenAI.Chat.Completions.ChatCompletion;
+      try {
+        response = await client.chat.completions.create({
+          model: MODEL,
+          messages: messages.slice(-40),
+          tools: SUB_TOOLS,
+          max_tokens: 8000,
+        });
+      } catch {
+        break;
+      }
+      messages.push(response.choices[0].message as Msg);
+      const msg = response.choices[0].message;
+      if (!msg.tool_calls || msg.tool_calls.length === 0) {
+        break; // 没有工具调用 → 进入 IDLE
+      }
+
+      const results: Msg[] = [];
+      for (const tc of msg.tool_calls) {
+        if (tc.type !== "function") continue;
+        let args: ToolArgs = {};
+        try {
+          args = JSON.parse(tc.function.arguments || "{}");
+        } catch {
+          args = {};
+        }
+        const h = handlers[tc.function.name];
+        const out = h ? await h(args) : `Unknown: ${tc.function.name}`;
+        results.push({ role: "tool", tool_call_id: tc.id, content: String(out) } as Msg);
+      }
+      messages.push(...results);
+    }
+    if (workShutdown) {
       shutdownRequested = true;
       break;
     }
-    if (nonProtocol.length) {
-      messages.push({ role: "user", content: `<inbox>${JSON.stringify(nonProtocol)}</inbox>` } as Msg);
-    }
 
-    let response: OpenAI.Chat.Completions.ChatCompletion;
-    try {
-      response = await client.chat.completions.create({
-        model: MODEL,
-        messages: messages.slice(-40),
-        tools: SUB_TOOLS,
-        max_tokens: 8000,
-      });
-    } catch {
+    // ── IDLE 阶段：轮询收件箱/任务板 ──
+    const idle = await idlePoll(name, messages);
+    if (idle === "shutdown" || idle === "timeout") {
       break;
     }
-    messages.push(response.choices[0].message as Msg);
-    const msg = response.choices[0].message;
-    if (!msg.tool_calls || msg.tool_calls.length === 0) {
-      // 空闲：等待收件箱消息（不退出），模拟 idle loop
-      while (!shutdownRequested) {
-        await sleep(1000);
-        const ib = BUS.readInbox(name);
-        if (!ib.length) continue;
-        let stop = false;
-        const np: Record<string, unknown>[] = [];
-        for (const m of ib) {
-          const mt = String(m.type ?? "");
-          if (mt === "shutdown_request" || mt === "plan_approval_response") {
-            if (handleInboxMessage(name, m, messages)) {
-              stop = true;
-              break;
-            }
-          } else {
-            np.push(m);
-          }
-        }
-        if (stop) {
-          shutdownRequested = true;
-          break;
-        }
-        if (np.length) {
-          messages.push({ role: "user", content: `<inbox>${JSON.stringify(np)}</inbox>` } as Msg);
-          break; // 带着新消息回到 LLM 轮
-        }
-      }
-      continue;
-    }
-
-    const results: Msg[] = [];
-    for (const tc of msg.tool_calls) {
-      if (tc.type !== "function") continue;
-      let args: ToolArgs = {};
-      try {
-        args = JSON.parse(tc.function.arguments || "{}");
-      } catch {
-        args = {};
-      }
-      const h = handlers[tc.function.name];
-      const out = h ? await h(args) : `Unknown: ${tc.function.name}`;
-      results.push({ role: "tool", tool_call_id: tc.id, content: String(out) } as Msg);
-    }
-    messages.push(...results);
+    // idle === "work": 带着新消息回到 WORK 阶段
   }
 
   let summary = "Done.";
