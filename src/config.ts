@@ -40,7 +40,13 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       description: "Run a shell command.",
       parameters: {
         type: "object",
-        properties: { command: { type: "string", description: "The shell command to execute." } },
+        properties: {
+          command: { type: "string", description: "The shell command to execute." },
+          run_in_background: {
+            type: "boolean",
+            description: "If true, run the command in the background and continue. Result arrives as a notification.",
+          },
+        },
         required: ["command"],
       },
     },

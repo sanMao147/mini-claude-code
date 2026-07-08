@@ -23,6 +23,7 @@ import {
   MAX_RECOVERY_RETRIES,
   CONTINUATION_PROMPT,
 } from "./errors.js";
+import { shouldRunBackground, startBackgroundTask, collectBackgroundResults } from "./background.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -165,6 +166,20 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
         break;
       }
 
+      // s13: 慢操作丢后台（bash 且 should_run_background），不阻塞主循环
+      if (name === "bash" && shouldRunBackground(name, args)) {
+        const bgId = startBackgroundTask(name, args);
+        console.log(`  \x1b[33m[background] ${bgId} ${String(args.command ?? "").slice(0, 40)}\x1b[0m`);
+        results.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content:
+            `[Background task ${bgId} started] Command: ${String(args.command ?? "")}. ` +
+            `Result will be available when complete.`,
+        } as Msg);
+        continue;
+      }
+
       console.log(`\x1b[33m$ ${name}\x1b[0m`);
 
       // s04: PreToolUse 钩子（权限等）；返回值 ≠ null → 阻止执行
@@ -191,6 +206,13 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
         tool_call_id: tc.id,
         content: output,
       } as Msg);
+    }
+
+    // s13: 收集已完成的后台任务通知，作为独立 user 消息注入
+    const bgNotifications = collectBackgroundResults();
+    for (const notif of bgNotifications) {
+      console.log("  \x1b[32m[inject] background notification\x1b[0m");
+      results.push({ role: "user", content: notif } as Msg);
     }
 
     // 将工具结果喂回，循环继续
