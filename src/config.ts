@@ -162,4 +162,64 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "create_task",
+      description: "Create a new persisted task with optional blockedBy dependencies.",
+      parameters: {
+        type: "object",
+        properties: {
+          subject: { type: "string", description: "Short title of the task." },
+          description: { type: "string", description: "Free-form description." },
+          blockedBy: { type: "array", items: { type: "string" }, description: "Task IDs this task depends on." },
+        },
+        required: ["subject"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_tasks",
+      description: "List all tasks with status, owner, and dependencies.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_task",
+      description: "Get full details of a specific task by ID.",
+      parameters: {
+        type: "object",
+        properties: { task_id: { type: "string", description: "The task ID." } },
+        required: ["task_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "claim_task",
+      description: "Claim a pending task. Sets owner and status to in_progress. Blocked until dependencies complete.",
+      parameters: {
+        type: "object",
+        properties: { task_id: { type: "string", description: "The task ID." } },
+        required: ["task_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "complete_task",
+      description: "Complete an in-progress task. Reports unblocked downstream tasks.",
+      parameters: {
+        type: "object",
+        properties: { task_id: { type: "string", description: "The task ID." } },
+        required: ["task_id"],
+      },
+    },
+  },
 ];

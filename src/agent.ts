@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import { client, MODEL, FALLBACK_MODEL, TOOLS } from "./config.js";
 import "./subagent.js"; // 自注册 task 工具
+import "./tasks.js"; // 自注册 create_task/list_tasks/get_task/claim_task/complete_task
 import { dispatchTool, type ToolArgs } from "./tools.js";
 import { triggerHooks, type ToolCallInfo } from "./hooks.js";
 import { shouldNag, resetNag, bumpNag } from "./todo.js";
