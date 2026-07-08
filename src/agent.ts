@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import { client, MODEL, SYSTEM, TOOLS } from "./config.js";
-import { runBash } from "./tools.js";
+import { dispatchTool, type ToolArgs } from "./tools.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -30,17 +30,24 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
     const results: Msg[] = [];
     for (const tc of assistantMessage.tool_calls) {
       if (tc.type !== "function") continue;
-      if (tc.function.name === "bash") {
-        const args = JSON.parse(tc.function.arguments || "{}");
-        console.log(`\x1b[33m$ ${args.command}\x1b[0m`);
-        const output = await runBash(args.command);
-        console.log(output.slice(0, 200));
-        results.push({
-          role: "tool",
-          tool_call_id: tc.id,
-          content: output,
-        } as Msg);
+      const name = tc.function.name;
+      let args: ToolArgs;
+      try {
+        args = JSON.parse(tc.function.arguments || "{}");
+      } catch {
+        args = {};
       }
+
+      console.log(`\x1b[33m$ ${name}\x1b[0m`);
+
+      // s02: 查表分发到具体 handler
+      const output = await dispatchTool(name, args);
+      console.log(output.slice(0, 200));
+      results.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: output,
+      } as Msg);
     }
 
     // 将工具结果喂回，循环继续

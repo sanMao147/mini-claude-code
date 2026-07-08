@@ -27,9 +27,9 @@ export const client = new OpenAI({
 
 export { MODEL, provider, BASE_URL };
 
-export const SYSTEM = `You are a coding agent at ${process.cwd()}. Use bash to solve tasks. Act, don't explain.`;
+export const SYSTEM = `You are a coding agent at ${process.cwd()}. Use tools to solve tasks. Act, don't explain.`;
 
-// ── 工具定义：仅 bash ────────────────────────────
+// ── 工具定义：bash + 4 个 file 工具（s02 起）──
 export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
@@ -38,10 +38,66 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       description: "Run a shell command.",
       parameters: {
         type: "object",
-        properties: {
-          command: { type: "string", description: "The shell command to execute." },
-        },
+        properties: { command: { type: "string", description: "The shell command to execute." } },
         required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Read file contents.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path to the file, relative to workspace." },
+          limit: { type: "integer", description: "Optional max number of lines to read." },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description: "Write content to a file (creates parent dirs).",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path to the file, relative to workspace." },
+          content: { type: "string", description: "Content to write." },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_file",
+      description: "Replace exact text in a file once.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path to the file, relative to workspace." },
+          old_text: { type: "string", description: "Exact text to find." },
+          new_text: { type: "string", description: "Replacement text." },
+        },
+        required: ["path", "old_text", "new_text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "glob",
+      description: "Find files matching a glob pattern relative to the workspace.",
+      parameters: {
+        type: "object",
+        properties: { pattern: { type: "string", description: "Glob pattern, e.g. '**/*.ts'." } },
+        required: ["pattern"],
       },
     },
   },
