@@ -1,7 +1,7 @@
 import type OpenAI from "openai";
 import { client, MODEL, SYSTEM, TOOLS } from "./config.js";
 import { dispatchTool, type ToolArgs } from "./tools.js";
-import { checkPermission } from "./permission.js";
+import { triggerHooks, type ToolCallInfo } from "./hooks.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -22,8 +22,14 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
     // 追加 assistant 回合（包含可能的 tool_calls）
     messages.push(assistantMessage as Msg);
 
-    // 模型没有调用工具，结束
+    // 模型没有调用工具
     if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+      // s04: Stop 钩子（返回值 ≠ null 强制续跑）
+      const force = await triggerHooks("Stop", messages);
+      if (force) {
+        messages.push({ role: "user", content: force } as Msg);
+        continue;
+      }
       return;
     }
 
@@ -41,13 +47,13 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
 
       console.log(`\x1b[33m$ ${name}\x1b[0m`);
 
-      // s03: 工具执行前先做权限判断
-      const allowed = await checkPermission(name, args);
-      if (!allowed) {
+      // s04: PreToolUse 钩子（权限等）；返回值 ≠ null → 阻止执行
+      const blocked = await triggerHooks("PreToolUse", { name, args } as ToolCallInfo);
+      if (blocked) {
         results.push({
           role: "tool",
           tool_call_id: tc.id,
-          content: "Permission denied.",
+          content: blocked,
         } as Msg);
         continue;
       }
@@ -55,6 +61,10 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
       // s02: 查表分发到具体 handler
       const output = await dispatchTool(name, args);
       console.log(output.slice(0, 200));
+
+      // s04: PostToolUse 钩子（日志/副作用）
+      await triggerHooks("PostToolUse", { name, output });
+
       results.push({
         role: "tool",
         tool_call_id: tc.id,

@@ -2,12 +2,13 @@ import type OpenAI from "openai";
 import { agentLoop } from "./agent.js";
 import { provider, BASE_URL, MODEL } from "./config.js";
 import { ask, closeInput } from "./input.js";
+import { triggerHooks } from "./hooks.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
 // ── 入口：交互式 REPL ──────────────────────────────
 async function main(): Promise<void> {
-  console.log("mini-claude-code: Agent Loop (+ tools / permission)");
+  console.log("mini-claude-code: Agent Loop (+ tools / hooks)");
   console.log(`服务商: ${provider}  |  模型: ${MODEL}`);
   console.log(`接口: ${BASE_URL}\n`);
   console.log("输入问题，回车发送。输入 q 退出。\n");
@@ -19,6 +20,9 @@ async function main(): Promise<void> {
       const query = (await ask("\x1b[36mmcc >> \x1b[0m")).trim();
       if (["q", "exit"].includes(query.toLowerCase())) break;
       if (query === "") continue;
+
+      // s04: UserPromptSubmit 钩子（进入 LLM 前）
+      await triggerHooks("UserPromptSubmit", query);
 
       history.push({ role: "user", content: query });
       await agentLoop(history);
