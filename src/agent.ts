@@ -2,6 +2,7 @@ import type OpenAI from "openai";
 import { client, MODEL, SYSTEM, TOOLS } from "./config.js";
 import { dispatchTool, type ToolArgs } from "./tools.js";
 import { triggerHooks, type ToolCallInfo } from "./hooks.js";
+import { shouldNag, resetNag, bumpNag } from "./todo.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -10,6 +11,12 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
   const system: Msg = { role: "system", content: SYSTEM };
 
   while (true) {
+    // s05: nag 提醒 —— 连续 3 轮没更新 todo 就注入一条提醒
+    if (shouldNag() && messages.length) {
+      messages.push({ role: "user", content: "<reminder>Update your todos.</reminder>" } as Msg);
+      resetNag();
+    }
+
     const response = await client.chat.completions.create({
       model: MODEL,
       messages: [system, ...messages],
@@ -32,6 +39,10 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
       }
       return;
     }
+
+    // s05: 每轮有工具调用就 +1（todo_write 时由工具自身重置）
+    bumpNag();
+
 
     // 执行每个工具调用，收集结果
     const results: Msg[] = [];
@@ -60,6 +71,7 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
 
       // s02: 查表分发到具体 handler
       const output = await dispatchTool(name, args);
+      if (name === "todo_write") resetNag(); // s05: 调用 todo_write 重置 nag
       console.log(output.slice(0, 200));
 
       // s04: PostToolUse 钩子（日志/副作用）

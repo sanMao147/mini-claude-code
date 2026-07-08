@@ -27,7 +27,7 @@ export const client = new OpenAI({
 
 export { MODEL, provider, BASE_URL };
 
-export const SYSTEM = `You are a coding agent at ${process.cwd()}. Use tools to solve tasks. Act, don't explain.`;
+export const SYSTEM = `You are a coding agent at ${process.cwd()}. Before starting any multi-step task, use todo_write to plan your steps. Update status as you go. Act, don't explain.`;
 
 // ── 工具定义：bash + 4 个 file 工具（s02 起）──
 export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -98,6 +98,30 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         type: "object",
         properties: { pattern: { type: "string", description: "Glob pattern, e.g. '**/*.ts'." } },
         required: ["pattern"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "todo_write",
+      description: "Create and manage a task list for your current coding session.",
+      parameters: {
+        type: "object",
+        properties: {
+          todos: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                content: { type: "string" },
+                status: { type: "string", enum: ["pending", "in_progress", "completed"] },
+              },
+              required: ["content", "status"],
+            },
+          },
+        },
+        required: ["todos"],
       },
     },
   },
