@@ -151,4 +151,15 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "compact",
+      description: "Summarize earlier conversation to free context space when it gets long.",
+      parameters: {
+        type: "object",
+        properties: { focus: { type: "string", description: "Optional focus hint for the summary." } },
+      },
+    },
+  },
 ];
