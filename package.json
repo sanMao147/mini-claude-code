@@ -1,0 +1,21 @@
+{
+  "name": "mini-claude-code",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A minimal AI coding agent implementing the agent loop, powered by DeepSeek via AIHubMix (OpenAI-compatible).",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "openai": "^4.67.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
