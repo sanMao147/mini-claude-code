@@ -27,7 +27,9 @@ export const client = new OpenAI({
 
 export { MODEL, provider, BASE_URL };
 
-export const SYSTEM = `You are a coding agent at ${process.cwd()}. Before starting any multi-step task, use todo_write to plan your steps. For complex sub-problems, use the task tool to spawn a subagent. Act, don't explain.`;
+import { buildSystem } from "./skills.js";
+
+export const SYSTEM = buildSystem();
 
 // ── 工具定义：bash + 4 个 file 工具（s02 起）──
 export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -134,6 +136,18 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         type: "object",
         properties: { description: { type: "string", description: "The self-contained task for the subagent." } },
         required: ["description"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "load_skill",
+      description: "Load the full content of a skill by name (catalog is shown in the system prompt).",
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string", description: "Skill name from the catalog." } },
+        required: ["name"],
       },
     },
   },
