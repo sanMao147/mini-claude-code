@@ -10,6 +10,7 @@ config({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
 const BASE_URL = process.env.BASE_URL ?? "https://aihubmix.com/v1";
 const API_KEY = process.env.API_KEY ?? "";
 const MODEL = process.env.MODEL_ID ?? "deepseek-chat";
+const FALLBACK_MODEL = process.env.FALLBACK_MODEL_ID || undefined; // s11: 连续 529 时切换
 
 // banner 显示用：取接口域名
 const provider = new URL(BASE_URL).host;
@@ -25,7 +26,7 @@ export const client = new OpenAI({
   apiKey: API_KEY,
 });
 
-export { MODEL, provider, BASE_URL };
+export { MODEL, FALLBACK_MODEL, provider, BASE_URL };
 
 
 

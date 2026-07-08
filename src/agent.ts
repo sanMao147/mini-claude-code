@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { client, MODEL, TOOLS } from "./config.js";
+import { client, MODEL, FALLBACK_MODEL, TOOLS } from "./config.js";
 import "./subagent.js"; // 自注册 task 工具
 import { dispatchTool, type ToolArgs } from "./tools.js";
 import { triggerHooks, type ToolCallInfo } from "./hooks.js";
@@ -13,14 +13,23 @@ import {
 } from "./context.js";
 import { getSystemPrompt, updateContext } from "./system.js";
 import { loadMemories, extractMemories, consolidateMemories } from "./memory.js";
+import {
+  newRecoveryState,
+  withRetry,
+  isPromptTooLongError,
+  DEFAULT_MAX_TOKENS,
+  ESCALATED_MAX_TOKENS,
+  MAX_RECOVERY_RETRIES,
+  CONTINUATION_PROMPT,
+} from "./errors.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
-const MAX_REACTIVE_RETRIES = 1;
-
 // ── 核心模式：一个 while 循环，持续调用工具直到模型停止 ──
 export async function agentLoop(messages: Msg[]): Promise<void> {
-  let reactiveRetries = 0;
+  // s11: 跨循环的错误恢复状态
+  const state = newRecoveryState(MODEL);
+  let maxTokens = DEFAULT_MAX_TOKENS;
 
   while (true) {
     // s05: nag 提醒 —— 连续 3 轮没更新 todo 就注入一条提醒
@@ -57,35 +66,62 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
       requestMessages = [systemMsg, ...messages];
     }
 
-    // LLM 调用（外层可能触发 reactive compact）
+    // LLM 调用：withRetry 处理 429/529，外层处理 prompt_too_long 等
     let response: OpenAI.Chat.Completions.ChatCompletion;
     try {
-      response = await client.chat.completions.create({
-        model: MODEL,
-        messages: requestMessages,
-        tools: TOOLS,
-        max_tokens: 8000,
-      });
-      reactiveRetries = 0; // 调用成功则重置
+      response = await withRetry(
+        () =>
+          client.chat.completions.create({
+            model: state.current_model,
+            messages: requestMessages,
+            tools: TOOLS,
+            max_tokens: maxTokens,
+          }),
+        state,
+        FALLBACK_MODEL,
+      );
     } catch (e: any) {
-      const errMsg = String(e?.message ?? e).toLowerCase();
-      if (
-        (errMsg.includes("maximum context") ||
-          errMsg.includes("too long") ||
-          errMsg.includes("tokens")) &&
-        reactiveRetries < MAX_REACTIVE_RETRIES
-      ) {
-        console.log("[reactive compact]");
-        const rc = await reactiveCompact(messages);
-        messages.length = 0;
-        messages.push(...rc);
-        reactiveRetries++;
-        continue;
+      // 路径 2: prompt_too_long → 响应式压缩（仅一次）
+      if (isPromptTooLongError(e)) {
+        if (!state.has_attempted_reactive_compact) {
+          state.has_attempted_reactive_compact = true;
+          const rc = await reactiveCompact(messages);
+          messages.length = 0;
+          messages.push(...rc);
+          continue;
+        }
+        console.log("  \x1b[31m[unrecoverable] still too long after compact\x1b[0m");
+        messages.push({ role: "assistant", content: "[Error] Context too large, cannot continue." } as Msg);
+        return;
       }
-      throw e;
+      const name = e?.constructor?.name ?? "Error";
+      console.log(`  \x1b[31m[unrecoverable] ${name}: ${String(e?.message ?? e).slice(0, 100)}\x1b[0m`);
+      messages.push({ role: "assistant", content: `[Error] ${name}: ${String(e?.message ?? e).slice(0, 200)}` } as Msg);
+      return;
     }
 
     const assistantMessage = response.choices[0].message;
+
+    // 路径 1: 输出被截断（finish_reason === "length"）
+    if (response.choices[0].finish_reason === "length") {
+      if (!state.has_escalated) {
+        // 首次：升级 token 上限，重放同一请求（不追加截断输出）
+        maxTokens = ESCALATED_MAX_TOKENS;
+        state.has_escalated = true;
+        console.log(`  \x1b[33m[max_tokens] escalating ${DEFAULT_MAX_TOKENS} -> ${ESCALATED_MAX_TOKENS}\x1b[0m`);
+        continue;
+      }
+      // 64K 仍截断：保存截断输出 + 续写提示（最多 MAX_RECOVERY_RETRIES 次）
+      messages.push(assistantMessage as Msg);
+      if (state.recovery_count < MAX_RECOVERY_RETRIES) {
+        messages.push({ role: "user", content: CONTINUATION_PROMPT } as Msg);
+        state.recovery_count += 1;
+        console.log(`  \x1b[33m[max_tokens] continuation ${state.recovery_count}/${MAX_RECOVERY_RETRIES}\x1b[0m`);
+        continue;
+      }
+      console.log("  \x1b[31m[max_tokens] recovery limit reached\x1b[0m");
+      return;
+    }
 
     // 追加 assistant 回合（包含可能的 tool_calls）
     messages.push(assistantMessage as Msg);
