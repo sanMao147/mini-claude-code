@@ -1,5 +1,6 @@
 import type OpenAI from "openai";
 import { client, MODEL, SYSTEM, TOOLS } from "./config.js";
+import "./subagent.js"; // 自注册 task 工具
 import { dispatchTool, type ToolArgs } from "./tools.js";
 import { triggerHooks, type ToolCallInfo } from "./hooks.js";
 import { shouldNag, resetNag, bumpNag } from "./todo.js";
