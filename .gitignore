@@ -6,4 +6,5 @@ dist/
 .transcripts/
 .task_outputs/
 .tasks/
+.scheduled_tasks.json
 

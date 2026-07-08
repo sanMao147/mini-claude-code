@@ -24,6 +24,8 @@ import {
   CONTINUATION_PROMPT,
 } from "./errors.js";
 import { shouldRunBackground, startBackgroundTask, collectBackgroundResults } from "./background.js";
+import { consumeCronQueue } from "./cron.js";
+import "./cron.js"; // 自注册 schedule_cron/list_crons/cancel_cron
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -34,6 +36,13 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
   let maxTokens = DEFAULT_MAX_TOKENS;
 
   while (true) {
+    // s14: 消费已触发的 cron 任务，作为 user 消息注入
+    const fired = consumeCronQueue();
+    for (const job of fired) {
+      messages.push({ role: "user", content: `[Scheduled] ${job.prompt}` } as Msg);
+      console.log(`  \x1b[35m[inject cron] ${job.prompt.slice(0, 50)}\x1b[0m`);
+    }
+
     // s05: nag 提醒 —— 连续 3 轮没更新 todo 就注入一条提醒
     if (shouldNag() && messages.length) {
       messages.push({ role: "user", content: "<reminder>Update your todos.</reminder>" } as Msg);

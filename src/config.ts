@@ -228,4 +228,41 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "schedule_cron",
+      description: "Schedule a recurring or one-shot cron job. cron is 5-field: min hour dom month dow.",
+      parameters: {
+        type: "object",
+        properties: {
+          cron: { type: "string", description: "5-field cron expression, e.g. '0 9 * * *'." },
+          prompt: { type: "string", description: "Message injected when the job fires." },
+          recurring: { type: "boolean", description: "True=recurring, False=one-shot." },
+          durable: { type: "boolean", description: "True=persist to disk across restarts." },
+        },
+        required: ["cron", "prompt"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_crons",
+      description: "List all registered cron jobs.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancel_cron",
+      description: "Cancel a cron job by ID.",
+      parameters: {
+        type: "object",
+        properties: { job_id: { type: "string", description: "The cron job ID." } },
+        required: ["job_id"],
+      },
+    },
+  },
 ];
