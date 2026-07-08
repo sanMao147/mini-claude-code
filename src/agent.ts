@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import { client, MODEL, SYSTEM, TOOLS } from "./config.js";
 import { dispatchTool, type ToolArgs } from "./tools.js";
+import { checkPermission } from "./permission.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -39,6 +40,17 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
       }
 
       console.log(`\x1b[33m$ ${name}\x1b[0m`);
+
+      // s03: 工具执行前先做权限判断
+      const allowed = await checkPermission(name, args);
+      if (!allowed) {
+        results.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: "Permission denied.",
+        } as Msg);
+        continue;
+      }
 
       // s02: 查表分发到具体 handler
       const output = await dispatchTool(name, args);
