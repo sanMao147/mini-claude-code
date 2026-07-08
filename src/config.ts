@@ -27,9 +27,8 @@ export const client = new OpenAI({
 
 export { MODEL, provider, BASE_URL };
 
-import { buildSystem } from "./skills.js";
 
-export const SYSTEM = buildSystem();
+
 
 // ── 工具定义：bash + 4 个 file 工具（s02 起）──
 export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [

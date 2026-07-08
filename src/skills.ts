@@ -67,17 +67,8 @@ export function listSkills(): string {
   return lines.join("\n");
 }
 
-export function buildSystem(): string {
-  const catalog = listSkills();
-  return [
-    `You are a coding agent at ${process.cwd()}.`,
-    `Before starting any multi-step task, use todo_write to plan your steps.`,
-    `For complex sub-problems, use the task tool to spawn a subagent.`,
-    `Skills available:`,
-    catalog,
-    `Use load_skill to get full details when needed.`,
-    `Act, don't explain.`,
-  ].join("\n");
+export function skillCatalog(): string {
+  return listSkills();
 }
 
 export function runLoadSkill(args: ToolArgs): string {

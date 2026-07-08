@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { client, MODEL, SYSTEM, TOOLS } from "./config.js";
+import { client, MODEL, TOOLS } from "./config.js";
 import "./subagent.js"; // 自注册 task 工具
 import { dispatchTool, type ToolArgs } from "./tools.js";
 import { triggerHooks, type ToolCallInfo } from "./hooks.js";
@@ -11,6 +11,8 @@ import {
   reactiveCompact,
   COMPACT_TOOL_RESULT,
 } from "./context.js";
+import { agentSystemPrompt } from "./system.js";
+import { loadMemories, extractMemories, consolidateMemories } from "./memory.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -18,7 +20,6 @@ const MAX_REACTIVE_RETRIES = 1;
 
 // ── 核心模式：一个 while 循环，持续调用工具直到模型停止 ──
 export async function agentLoop(messages: Msg[]): Promise<void> {
-  const system: Msg = { role: "system", content: SYSTEM };
   let reactiveRetries = 0;
 
   while (true) {
@@ -41,12 +42,27 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
       messages.push(...c);
     }
 
+    // s09: 组合系统提示（技能目录 + 记忆索引），并把相关记忆注入到最新 user 回合
+    const systemMsg: Msg = { role: "system", content: agentSystemPrompt() };
+    const mem = await loadMemories(messages);
+    let requestMessages: Msg[];
+    if (mem && messages.length) {
+      const copy = messages.map((m) => ({ ...m }));
+      const last = copy[copy.length - 1];
+      if (last.role === "user" && typeof last.content === "string") {
+        last.content = `${mem}\n\n${last.content}`;
+      }
+      requestMessages = [systemMsg, ...copy];
+    } else {
+      requestMessages = [systemMsg, ...messages];
+    }
+
     // LLM 调用（外层可能触发 reactive compact）
     let response: OpenAI.Chat.Completions.ChatCompletion;
     try {
       response = await client.chat.completions.create({
         model: MODEL,
-        messages: [system, ...messages],
+        messages: requestMessages,
         tools: TOOLS,
         max_tokens: 8000,
       });
@@ -82,6 +98,9 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
         messages.push({ role: "user", content: force } as Msg);
         continue;
       }
+      // s09: 回合结束 → 抽取并整合记忆
+      await extractMemories(messages);
+      await consolidateMemories();
       return;
     }
 
