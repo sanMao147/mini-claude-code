@@ -2,6 +2,7 @@ import { skillCatalog } from "./skills.js";
 import { readMemoryIndex } from "./memory.js";
 import { TOOL_HANDLERS } from "./tools.js";
 import { getConnectedMcps } from "./mcp.js";
+import { getActiveTeammates } from "./teams.js";
 
 // ── s10: 运行时按真实状态组装系统提示，带确定性缓存 ──
 //   PROMPT_SECTIONS: 主题分段，每段独立维护
@@ -24,6 +25,8 @@ export interface PromptContext {
   skills: string; // 技能目录文本（空串 = 不加载 skills 段）
   memories: string; // MEMORY.md 索引内容（空串 = 不加载 memory 段）
   mcp: string; // 已连接的 MCP server 名（逗号分隔，空串 = 不加载 mcp 段）
+  teammates: string; // 活跃 teammate 名（逗号分隔，空串 = 不加载）
+  time: string; // 当前时间（ISO），便于模型感知时序
 }
 
 // 从真实状态派生 context（工具是否注册、文件是否存在，而非消息关键词）
@@ -42,15 +45,18 @@ export function updateContext(): PromptContext {
     skills,
     memories,
     mcp: getConnectedMcps().join(", "),
+    teammates: getActiveTeammates().join(", "),
+    time: new Date().toISOString(),
   };
 }
 
-// 按需拼接：始终加载三段，按真实状态决定是否加载 skills/memory/mcp
+// 按需拼接：始终加载三段，按真实状态决定是否加载 skills/memory/mcp/teammates
 export function assembleSystemPrompt(ctx: PromptContext): string {
   const sections: string[] = [];
   sections.push(PROMPT_SECTIONS.identity);
   sections.push(PROMPT_SECTIONS.tools);
   sections.push(PROMPT_SECTIONS.workspace);
+  sections.push(`Current time: ${ctx.time}`);
   if (ctx.skills.trim()) {
     sections.push(`${PROMPT_SECTIONS.skills}\n${ctx.skills}`);
   }
@@ -59,6 +65,9 @@ export function assembleSystemPrompt(ctx: PromptContext): string {
   }
   if (ctx.mcp.trim()) {
     sections.push(`Connected MCP servers: ${ctx.mcp}`);
+  }
+  if (ctx.teammates.trim()) {
+    sections.push(`Active teammates: ${ctx.teammates}`);
   }
   return sections.join("\n\n");
 }
@@ -75,9 +84,11 @@ export function getSystemPrompt(ctx: PromptContext): string {
   }
   _lastKey = key;
   _lastPrompt = assembleSystemPrompt(ctx);
-  const loaded = ["identity", "tools", "workspace"];
+  const loaded = ["identity", "tools", "workspace", "time"];
   if (ctx.skills.trim()) loaded.push("skills");
   if (ctx.memories.trim()) loaded.push("memory");
+  if (ctx.mcp.trim()) loaded.push("mcp");
+  if (ctx.teammates.trim()) loaded.push("teammates");
   console.log(`  \x1b[32m[assembled] sections: ${loaded.join(", ")}\x1b[0m`);
   return _lastPrompt;
 }

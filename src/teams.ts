@@ -417,6 +417,11 @@ export function spawnTeammate(name: string, role: string, prompt: string): strin
   return `Teammate '${name}' spawned as ${role}`;
 }
 
+// 当前活跃的 teammate 列表（s20 综合：注入系统提示，便于模型感知协作状态）
+export function getActiveTeammates(): string[] {
+  return [...activeTeammates];
+}
+
 // ── Lead 协议工具 ──
 export function runRequestShutdown(teammate: string): string {
   const reqId = newRequestId();
