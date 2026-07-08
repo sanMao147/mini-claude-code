@@ -347,4 +347,47 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  // s18: worktree isolation
+  {
+    type: "function",
+    function: {
+      name: "create_worktree",
+      description: "Create an isolated git worktree with its own branch (wt/<name>). Optionally bind to a task.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Worktree name (letters/digits/._- , 1-64 chars)." },
+          task_id: { type: "string", description: "Optional task id to bind to this worktree." },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "remove_worktree",
+      description: "Remove a worktree. Refuses if uncommitted/unpushed changes unless discard_changes=true.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Worktree name." },
+          discard_changes: { type: "boolean", description: "Force removal ignoring pending changes." },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "keep_worktree",
+      description: "Keep a worktree for manual review (branch preserved).",
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string", description: "Worktree name." } },
+        required: ["name"],
+      },
+    },
+  },
 ];

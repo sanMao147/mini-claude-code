@@ -15,6 +15,7 @@ export interface Task {
   status: TaskStatus;
   owner: string | null;
   blockedBy: string[];
+  worktree: string | null; // s18: bound worktree name
 }
 
 const TASKS_DIR = path.resolve(process.cwd(), ".tasks");
@@ -32,7 +33,7 @@ export function createTask(subject: string, description = "", blockedBy: string[
   const id = `task_${Date.now()}_${Math.floor(Math.random() * 10000)
     .toString()
     .padStart(4, "0")}`;
-  const task: Task = { id, subject, description, status: "pending", owner: null, blockedBy };
+  const task: Task = { id, subject, description, status: "pending", owner: null, blockedBy, worktree: null };
   saveTask(task);
   return task;
 }
@@ -117,7 +118,8 @@ function runListTasks(_args: ToolArgs): string {
     .map((t) => {
       const deps = t.blockedBy.length ? ` (blockedBy: ${t.blockedBy.join(", ")})` : "";
       const owner = t.owner ? ` [${t.owner}]` : "";
-      return `  ${icon[t.status]} ${t.id}: ${t.subject} [${t.status}]${owner}${deps}`;
+      const wt = t.worktree ? ` (wt:${t.worktree})` : "";
+      return `  ${icon[t.status]} ${t.id}: ${t.subject} [${t.status}]${owner}${wt}${deps}`;
     })
     .join("\n");
 }

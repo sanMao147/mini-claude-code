@@ -28,6 +28,7 @@ import { consumeCronQueue } from "./cron.js";
 import "./cron.js"; // 自注册 schedule_cron/list_crons/cancel_cron
 import { consumeLeadInbox } from "./teams.js";
 import "./teams.js"; // 自注册 spawn_teammate/send_message/check_inbox
+import "./worktree.js"; // 自注册 create_worktree/remove_worktree/keep_worktree (s18)
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 

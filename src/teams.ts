@@ -4,6 +4,7 @@ import type OpenAI from "openai";
 import { client, MODEL } from "./config.js";
 import { TOOL_HANDLERS, runBash, runRead, runWrite, type ToolArgs } from "./tools.js";
 import { listTasks, claimTask, completeTask, canStart, type Task } from "./tasks.js";
+import { getTaskWorktreePath } from "./worktree.js";
 
 // ── s15/s16: Agent Teams — MessageBus + 协议(请求/响应) + 后台 teammate ──
 
@@ -271,19 +272,32 @@ async function teammateRun(name: string, role: string, prompt: string): Promise<
     `You can list and claim tasks from the board. ` +
     `Check inbox for protocol messages (shutdown_request, plan_approval_response).`;
   const messages: Msg[] = [{ role: "user", content: prompt }];
+  // 当前绑定的 worktree 工作目录（s18）：认领任务时设置，完成时清空
+  let wtCwd: string | null = null;
   const handlers: Record<string, (a: ToolArgs) => string | Promise<string>> = {
-    bash: (a) => runBash(String(a.command)),
-    read_file: runRead,
-    write_file: runWrite,
+    bash: (a) => runBash(String(a.command), wtCwd ?? undefined),
+    read_file: (a) => runRead(a, wtCwd ?? undefined),
+    write_file: (a) => runWrite(a, wtCwd ?? undefined),
     send_message: (a) => {
       BUS.send(name, String(a.to), String(a.content));
       return "Sent";
     },
     submit_plan: (a) => teammateSubmitPlan(name, String(a.plan)),
     list_tasks: () =>
-      listTasks().map((t) => `  ${t.id}: ${t.subject} [${t.status}]`).join("\n") || "No tasks.",
-    claim_task: (a) => claimTask(String(a.task_id), name),
-    complete_task: (a) => completeTask(String(a.task_id)),
+      listTasks()
+        .map((t) => `  ${t.id}: ${t.subject} [${t.status}]${t.worktree ? ` (wt:${t.worktree})` : ""}`)
+        .join("\n") || "No tasks.",
+    claim_task: (a) => {
+      const r = claimTask(String(a.task_id), name);
+      if (r.includes("Claimed")) {
+        wtCwd = getTaskWorktreePath(String(a.task_id)); // 绑定 worktree 目录
+      }
+      return r;
+    },
+    complete_task: (a) => {
+      wtCwd = null; // 完事清空工作目录
+      return completeTask(String(a.task_id));
+    },
   };
 
   let shutdownRequested = false;

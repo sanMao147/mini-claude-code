@@ -16,11 +16,11 @@ export const TOOL_HANDLERS = new Map<string, ToolHandler>();
 // 危险命令拦截（bash 工具）
 const DANGEROUS = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"];
 
-// ── 路径安全：限制在 WORKDIR 之内（file tools 用）──
-function resolveSafe(p: string): string {
-  const base = path.resolve(WORKDIR);
-  const target = path.resolve(base, p);
-  const rel = path.relative(base, target);
+// ── 路径安全：限制在 base 之内（file tools 用，base 默认 WORKDIR）──
+function resolveSafe(p: string, base: string = WORKDIR): string {
+  const b = path.resolve(base);
+  const target = path.resolve(b, p);
+  const rel = path.relative(b, target);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new Error(`Path escapes workspace: ${p}`);
   }
@@ -37,13 +37,13 @@ export function isInsideWorkspace(p: string): boolean {
 }
 
 // ── bash：运行 shell 命令 ──────────────────────
-export async function runBash(command: string): Promise<string> {
+export async function runBash(command: string, cwdOverride?: string): Promise<string> {
   if (DANGEROUS.some((d) => command.includes(d))) {
     return "Error: Dangerous command blocked";
   }
   try {
     const { stdout, stderr } = await execAsync(command, {
-      cwd: cwd(),
+      cwd: cwdOverride ?? cwd(),
       timeout: 120_000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -62,10 +62,10 @@ export async function runBash(command: string): Promise<string> {
 }
 
 // ── read_file：读文件（可选行数限制）──
-export function runRead(args: ToolArgs): string {
+export function runRead(args: ToolArgs, cwdOverride?: string): string {
   const limit = typeof args.limit === "number" ? args.limit : undefined;
   try {
-    let lines = fs.readFileSync(resolveSafe(String(args.path)), "utf8").split(/\r?\n/);
+    let lines = fs.readFileSync(resolveSafe(String(args.path), cwdOverride), "utf8").split(/\r?\n/);
     if (limit !== undefined && limit < lines.length) {
       lines = lines.slice(0, limit).concat([`... (${lines.length - limit} more lines)`]);
     }
@@ -76,9 +76,9 @@ export function runRead(args: ToolArgs): string {
 }
 
 // ── write_file：写文件 ─────────────────────────
-export function runWrite(args: ToolArgs): string {
+export function runWrite(args: ToolArgs, cwdOverride?: string): string {
   try {
-    const fp = resolveSafe(String(args.path));
+    const fp = resolveSafe(String(args.path), cwdOverride);
     fs.mkdirSync(path.dirname(fp), { recursive: true });
     const content = String(args.content ?? "");
     fs.writeFileSync(fp, content);
