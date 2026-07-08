@@ -390,4 +390,17 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  // s19: MCP plugin
+  {
+    type: "function",
+    function: {
+      name: "connect_mcp",
+      description: "Connect to an MCP server (docs, deploy) and discover its tools into the pool.",
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string", description: "MCP server name (docs, deploy)." } },
+        required: ["name"],
+      },
+    },
+  },
 ];

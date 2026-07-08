@@ -1,6 +1,7 @@
 import { skillCatalog } from "./skills.js";
 import { readMemoryIndex } from "./memory.js";
 import { TOOL_HANDLERS } from "./tools.js";
+import { getConnectedMcps } from "./mcp.js";
 
 // ── s10: 运行时按真实状态组装系统提示，带确定性缓存 ──
 //   PROMPT_SECTIONS: 主题分段，每段独立维护
@@ -22,6 +23,7 @@ export interface PromptContext {
   workspace: string;
   skills: string; // 技能目录文本（空串 = 不加载 skills 段）
   memories: string; // MEMORY.md 索引内容（空串 = 不加载 memory 段）
+  mcp: string; // 已连接的 MCP server 名（逗号分隔，空串 = 不加载 mcp 段）
 }
 
 // 从真实状态派生 context（工具是否注册、文件是否存在，而非消息关键词）
@@ -39,10 +41,11 @@ export function updateContext(): PromptContext {
     workspace: process.cwd(),
     skills,
     memories,
+    mcp: getConnectedMcps().join(", "),
   };
 }
 
-// 按需拼接：始终加载三段，按真实状态决定是否加载 skills/memory
+// 按需拼接：始终加载三段，按真实状态决定是否加载 skills/memory/mcp
 export function assembleSystemPrompt(ctx: PromptContext): string {
   const sections: string[] = [];
   sections.push(PROMPT_SECTIONS.identity);
@@ -53,6 +56,9 @@ export function assembleSystemPrompt(ctx: PromptContext): string {
   }
   if (ctx.memories.trim()) {
     sections.push(`Relevant memories:\n${ctx.memories}`);
+  }
+  if (ctx.mcp.trim()) {
+    sections.push(`Connected MCP servers: ${ctx.mcp}`);
   }
   return sections.join("\n\n");
 }

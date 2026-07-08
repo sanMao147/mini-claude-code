@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { client, MODEL, FALLBACK_MODEL, TOOLS } from "./config.js";
+import { client, MODEL, FALLBACK_MODEL } from "./config.js";
 import "./subagent.js"; // 自注册 task 工具
 import "./tasks.js"; // 自注册 create_task/list_tasks/get_task/claim_task/complete_task
 import { dispatchTool, type ToolArgs } from "./tools.js";
@@ -29,6 +29,8 @@ import "./cron.js"; // 自注册 schedule_cron/list_crons/cancel_cron
 import { consumeLeadInbox } from "./teams.js";
 import "./teams.js"; // 自注册 spawn_teammate/send_message/check_inbox
 import "./worktree.js"; // 自注册 create_worktree/remove_worktree/keep_worktree (s18)
+import "./mcp.js"; // 自注册 connect_mcp + assembleToolPool (s19)
+import { assembleToolPool } from "./mcp.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -95,7 +97,7 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
           client.chat.completions.create({
             model: state.current_model,
             messages: requestMessages,
-            tools: TOOLS,
+            tools: assembleToolPool(),
             max_tokens: maxTokens,
           }),
         state,
