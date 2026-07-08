@@ -73,7 +73,7 @@ const SUB_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 ];
 
 const SUB_HANDLERS: Record<string, (a: ToolArgs) => string | Promise<string>> = {
-  bash: runBash,
+  bash: (a) => runBash(String(a.command)),
   read_file: runRead,
   write_file: runWrite,
   edit_file: runEdit,
@@ -89,13 +89,15 @@ function extractText(msg: SubMsg): string {
 
 export async function spawnSubagent(description: string): Promise<string> {
   console.log(`\n\x1b[35m[Subagent spawned]\x1b[0m`);
-  const messages: SubMsg[] = [{ role: "user", content: description }]; // 全新上下文
+  const messages: SubMsg[] = [
+    { role: "system", content: SUB_SYSTEM },
+    { role: "user", content: description }, // 全新上下文
+  ];
 
   for (let i = 0; i < 30; i++) {
     // 安全上限：每个子代理最多 30 轮
     const response = await client.chat.completions.create({
       model: MODEL,
-      system: SUB_SYSTEM,
       messages,
       tools: SUB_TOOLS,
       max_tokens: 8000,
