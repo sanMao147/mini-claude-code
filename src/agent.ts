@@ -11,7 +11,7 @@ import {
   reactiveCompact,
   COMPACT_TOOL_RESULT,
 } from "./context.js";
-import { agentSystemPrompt } from "./system.js";
+import { getSystemPrompt, updateContext } from "./system.js";
 import { loadMemories, extractMemories, consolidateMemories } from "./memory.js";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -42,8 +42,8 @@ export async function agentLoop(messages: Msg[]): Promise<void> {
       messages.push(...c);
     }
 
-    // s09: 组合系统提示（技能目录 + 记忆索引），并把相关记忆注入到最新 user 回合
-    const systemMsg: Msg = { role: "system", content: agentSystemPrompt() };
+    // s10: 按真实状态组装系统提示（分段 + 缓存），并把相关记忆注入到最新 user 回合
+    const systemMsg: Msg = { role: "system", content: getSystemPrompt(updateContext()) };
     const mem = await loadMemories(messages);
     let requestMessages: Msg[];
     if (mem && messages.length) {
