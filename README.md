@@ -25,6 +25,38 @@ while (model wants to use a tool) {
 
 生产级 Agent 只是在此基础上叠加了权限控制、hooks 和生命周期管理。
 
+## 流程思维图
+
+```mermaid
+mindmap
+  root((mini-claude-code))
+    用户输入
+      REPL 读取任务
+      UserPromptSubmit Hook
+      写入 messages
+    Agent Loop
+      发送 system 和历史消息
+      请求 OpenAI 兼容接口
+      接收 assistant 消息
+    工具调用
+      解析 tool_calls
+      PreToolUse Hook
+        权限检查
+        危险命令确认
+        越界写入确认
+      dispatchTool 执行工具
+      PostToolUse Hook
+        工具日志
+        大输出提醒
+      工具结果写回 messages
+    停止判断
+      没有 tool_calls
+      Stop Hook
+        统计工具调用
+        可返回提示强制续跑
+      返回最终回复
+```
+
 ## 技术栈
 
 - **Node.js + TypeScript + pnpm**
